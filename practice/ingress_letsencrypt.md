@@ -1,342 +1,113 @@
-# kubernetes_ingress_letsencrypt
+# Kubernetes Ingress Let's Encrypt
 
-![](https://i.imgur.com/bbCz37T.png)
-## 申请Domain Name
-首先就是申请一个你要的网域, 这边网路上资源很多都可以查一下哪个网域商或是一些相关的建议,这边我就先不去多做介绍了,文章中会以sam.nctu.me来作范例
+## 申请域名
 
+在使用 Let's Encrypt 之前需要申请一个域名，比如可以到 GoDaddy、Name 等网站购买。具体步骤这里不再细说，可以参考网络教程操作。
 
+## 部署 Nginx Ingress Controller
 
-## 用[Letsencrypt](https://letsencrypt.org/)来签发凭证
-这边我们用手动的把它先签下来,上[Letsencrypt](https://letsencrypt.org/)去安装certbot, 手动签的方式也可以参考[签letsencrpyt凭证](https://www.nctusam.com/2017/08/30/ubuntumint-nginx-%E7%B0%BDletsencrpyt%E6%86%91%E8%AD%89/) 文章,输入以下指令来签凭证
+直接使用 Helm 部署即可：
 
-
-```shell
-$ sudo certbot certonly --standalone sam.nctu.me
-```
-结果会如下方显示
-```
-IMPORTANT NOTES:
- - Congratulations! Your certificate and chain have been saved at:
-   /etc/letsencrypt/live/sam.nctu.me/fullchain.pem
-   Your key file has been saved at:
-   /etc/letsencrypt/live/sam.nctu.me/privkey.pem
-   Your cert will expire on 2017-12-15. To obtain a new or tweaked
-   version of this certificate in the future, simply run certbot
-   again. To non-interactively renew *all* of your certificates, run
-   "certbot renew"
- - If you like Certbot, please consider supporting our work by:
-
-   Donating to ISRG / Let's Encrypt:   https://letsencrypt.org/donate
-   Donating to EFF:                    https://eff.org/donate-le
-
+```sh
+helm install stable/nginx-ingress --name nginx-ingress --set rbac.create=true --namespace=kube-system
 ```
 
+部署成功后，查询 Ingress 服务的公网 IP 地址（下文中假设该 IP 是 `6.6.6.6`）：
 
-签好后会自动放在
-
-```
-/etc/letsencrypt/live/sam.nctu.me/
-```
-可以看到裡面的凭证,权限必须是root才能看到这个资料夹的内容
-```shell
-# ls
-cert.pem  chain.pem  fullchain.pem  privkey.pem  README
+```sh
+$ kubectl -n kube-system get service nginx-ingress-controller
+NAME                       TYPE           CLUSTER-IP     EXTERNAL-IP     PORT(S)                      AGE
+nginx-ingress-controller   LoadBalancer   10.0.216.124   6.6.6.6         80:31935/TCP,443:31797/TCP   4d
 ```
 
-这样凭证就签完了
+然后到域名注册服务商网站中，创建 A 记录，将需要的域名解析到 `6.6.6.6`。
 
-## 设置Kubernetes Secret
+## 开启  Let's Encrypt
 
-将fullchain.pem(因为使用nginx controller) 与 privkey.pem来建立secret,这之后会配置给ingress使用
+```sh
+# Install cert-manager
+helm install --namespace=kube-system --name cert-manager stable/cert-manager --set ingressShim.defaultIssuerName=letsencrypt --set ingressShim.defaultIssuerKind=ClusterIssuer
 
-```shell
-$ kubectl create secret tls tls-certs --cert fullchain.pem --key privkey.pem 
+# create cluster issuer
+kubectl apply -f https://raw.githubusercontent.com/feiskyer/kubernetes-handbook/master/manifests/ingress-nginx/cert-manager/cluster-issuer.yaml
 ```
-查看secret
-```shell
-$ kubectl get secret
-NAME                              TYPE                                  DATA      AGE
-default-token-rtlbl               kubernetes.io/service-account-token   3         6d
-tls-certs                         kubernetes.io/tls                     2         55m
+
+## 创建 Ingress
+
+首先，创建一个 Secret，用于登录认证：
+
+```sh
+$ htpasswd -c auth foo
+$ kubectl -n kube-system create secret generic basic-auth --from-file=auth
 ```
-以建立完成
 
+### HTTP Ingress 示例
 
-## 建立Ingress
-我们先去建立一个ingress的yaml档,来帮助我们create ingress并加入tls的设定
-ingress.yaml
-```yaml=
-apiVersion: extensions/v1beta1                                                                                
+为 nginx 服务（端口 80）创建 TLS Ingress，并且自动将 `http://echo-tls.example.com` 重定向到 `https://echo-tls.example.com`：
+
+```sh
+cat <<EOF | kubectl create -f-
+apiVersion: extensions/v1beta1
 kind: Ingress
 metadata:
-  name: nginx-ingress
+  name: web
+  namespace: default
+  annotations:
+    kubernetes.io/tls-acme: "true"
+    kubernetes.io/ingress.class: "nginx"
+    ingress.kubernetes.io/ssl-redirect: "true"
+    certmanager.k8s.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
   tls:
-    - hosts:
-      - sam.nctu.me
-      secretName: tls-certs
+  - hosts:
+    - echo-tls.example.com
+    secretName: web-tls
   rules:
-  - host: sam.nctu.me
+  - host: echo-tls.example.com
     http:
       paths:
-        - backend:
-            serviceName: phpmyadmin
-            servicePort: 80
-```
-然后建立此Ingress
-
-```shell
-$ kubectl create -f ingress.yaml
-```
-并查看
-```shell
-$ kubectl get ingress 
-NAME            HOSTS            ADDRESS   PORTS     AGE
-nginx-ingress   sam.nctu.me             80, 443   1h
+      - path: /
+        backend:
+          serviceName: nginx
+          servicePort: 80
+EOF
 ```
 
-## 建立default-backend
-先建立一个delfault,如果试着用ip直接request或是没有设定过的domain name,会回传404
+### TLS Ingress
 
-default-backend.yaml
-```yaml=
+为 Kubernetes Dashboard 服务（端口443）创建 TLS Ingress，并且禁止该域名的 HTTP 访问：
+
+```yaml
 apiVersion: extensions/v1beta1
-kind: Deployment
+kind: Ingress
 metadata:
-  name: default-http-backend
-  labels:
-    k8s-app: default-http-backend
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    kubernetes.io/tls-acme: "true"
+    kubernetes.io/ingress.allow-http: "false"
+    nginx.ingress.kubernetes.io/auth-realm: Authentication Required
+    nginx.ingress.kubernetes.io/auth-secret: basic-auth
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/secure-backends: "true"
+    certmanager.k8s.io/cluster-issuer: letsencrypt
+  name: dashboard
   namespace: kube-system
 spec:
-  replicas: 1
-  template:
-    metadata:
-      labels:
-        k8s-app: default-http-backend
-    spec:
-      terminationGracePeriodSeconds: 60
-      containers:
-      - name: default-http-backend
-        # Any image is permissable as long as:
-        # 1. It serves a 404 page at /
-        # 2. It serves 200 on a /healthz endpoint
-        image: gcr.io/google_containers/defaultbackend:1.0
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: 8080
-            scheme: HTTP
-          initialDelaySeconds: 30
-          timeoutSeconds: 5
-        ports:
-        - containerPort: 8080
-        resources:
-          limits:
-            cpu: 10m
-            memory: 20Mi
-          requests:
-            cpu: 10m
-            memory: 20Mi
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: default-http-backend
-  namespace: kube-system
-  labels:
-    k8s-app: default-http-backend
-spec:
-  ports:
-  - port: 80
-    targetPort: 8080
-  selector:
-    k8s-app: default-http-backend
+  tls:
+  - hosts:
+    - dashboard.example.com
+    secretName: dashboard-ingress-tls
+  rules:
+  - host: dashboard.example.com
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: kubernetes-dashboard
+          servicePort: 443
 ```
 
-```shell
-$ kubectl create -f default-backend.yaml
-```
-## 建立Ingress-Nginx-Controller
-这边有个小坑,在建立之前要先设置RBAC才会顺利建起来,花了点时间才发现,所以我们要先建立相关的RBAC
-ingress-controller-rbac.yaml
-```yaml=
-apiVersion: rbac.authorization.k8s.io/v1beta1
-kind: ClusterRole
-metadata:
-  name: ingress
-rules:
-- apiGroups:
-  - ""
-  resources:
-  - configmaps
-  - secrets
-  - services
-  - endpoints
-  - ingresses
-  - nodes
-  - pods
-  verbs:
-  - list
-  - watch
-- apiGroups:
-  - "extensions"
-  resources:
-  - ingresses
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - events
-  - services
-  verbs:
-  - create
-  - list
-  - update
-  - get
-  - patch
-- apiGroups:
-  - "extensions"
-  resources:
-  - ingresses/status
-  - ingresses
-  verbs:
-  - update
----
-apiVersion: rbac.authorization.k8s.io/v1beta1
-kind: Role
-metadata:
-  name: ingress-ns
-  namespace: kube-system
-rules:
-- apiGroups:
-  - ""
-  resources:
-  - pods
-  verbs:
-  - list
-- apiGroups:
-  - ""
-  resources:
-  - services
-  verbs:
-  - get
-- apiGroups:
-  - ""
-  resources:
-  - endpoints
-  verbs:
-  - get
-  - create
-  - update
----
-apiVersion: rbac.authorization.k8s.io/v1beta1
-kind: RoleBinding
-metadata:
-  name: ingress-ns-binding
-  namespace: kube-system
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: ingress-ns
-subjects:
-  - kind: ServiceAccount
-    name: ingress
-    namespace: kube-system
----
-apiVersion: rbac.authorization.k8s.io/v1beta1
-kind: ClusterRoleBinding
-metadata:
-  name: ingress-binding
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: ingress
-subjects:
-  - kind: ServiceAccount
-    name: ingress
-    namespace: kube-system
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: ingress
-  namespace: kube-system
-```
+## 参考文档
 
-```shell
-$ kubectl create -f ingress-controller-rbac.yaml
-```
-
-之后就可以建立Ingress-controller
-nginx-ingress-daemonset.yaml
-```yaml=
-apiVersion: extensions/v1beta1
-kind: DaemonSet
-metadata:
-  name: nginx-ingress-controller
-  labels:
-    k8s-app: nginx-ingress-controller
-  namespace: kube-system
-spec:
-  template:
-    metadata:
-      labels:
-        k8s-app: nginx-ingress-controller
-    spec:
-      # hostNetwork makes it possible to use ipv6 and to preserve the source IP correctly regardless of docker configuration
-      # however, it is not a hard dependency of the nginx-ingress-controller itself and it may cause issues if port 10254 already is taken on the host
-      # that said, since hostPort is broken on CNI (https://github.com/kubernetes/kubernetes/issues/31307) we have to use hostNetwork where CNI is used
-      # like with kubeadm
-      hostNetwork: true
-      terminationGracePeriodSeconds: 60
-      serviceAccountName: ingress
-      containers:
-      - image: gcr.io/google_containers/nginx-ingress-controller:0.9.0-beta.3
-        name: nginx-ingress-controller
-        readinessProbe:
-          httpGet:
-            path: /healthz
-            port: 10254
-            scheme: HTTP
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: 10254
-            scheme: HTTP
-          initialDelaySeconds: 10
-          timeoutSeconds: 1
-        ports:
-        - containerPort: 80
-          hostPort: 80
-        - containerPort: 443
-          hostPort: 443
-        env:
-          - name: POD_NAME
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.name
-          - name: POD_NAMESPACE
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.namespace
-        args:
-        - /nginx-ingress-controller
-        - --default-backend-service=$(POD_NAMESPACE)/default-http-backend
-```
-```shell
-$ kubectl create -f nginx-ingress-daemonset.yaml
-```
-查看是否有建立完成
-```shell
-$ kubectl get pod -n kube-system
-nginx-ingress-controller-3q2b0           1/1       Running   0          1h
-nginx-ingress-controller-j28sz           1/1       Running   0          1h
-nginx-ingress-controller-lrn34           1/1       Running   0          1h
-
-```
-然后再测试 直接输入 https://sam.nctu.tw 就行了, 当然这边只是测试,记得换成你设定的domain name
-
-以上相關代碼放在[github](https://github.com/kweisamx/kubernetes_ingress_letsencrypt)
+- [Nginx Ingress Controller Documentation](https://kubernetes.github.io/ingress-nginx/)

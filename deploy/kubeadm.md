@@ -1,80 +1,75 @@
 # kubeadm
 
-> Kubernetes一键部署脚本（使用docker运行时）
+> Kubernetes 一键部署脚本（使用 docker 运行时）
 
 ```sh
 # on master
+export USE_MIRROR=true #国内用户必须使用MIRROR
 git clone https://github.com/feiskyer/ops
 cd ops
 kubernetes/install-kubernetes.sh
-# 记住控制台输出的TOEKN和MASTER地址，在其他Node安装时会用到
+# 记住控制台输出的 TOEKN 和 MASTER 地址，在其他 Node 安装时会用到
 
-# on node
+# on all nodes
 git clone https://github.com/feiskyer/ops
 cd ops
-export TOKEN=xxxxx
-export MASTER_IP=xx.xx.xx.xx
-kubernetes/add-docker-node.sh
+# Setup token and CIDR first.
+# replace this with yours.
+export TOKEN="xxxx"
+export MASTER_IP="x.x.x.x"
+export CONTAINER_CIDR="10.244.2.0/24"
+
+# Setup and join the new node.
+./kubernetes/add-node.sh
 ```
 
-以下是详细的安装步骤。
+以下是详细的 kubeadm 部署集群步骤。
 
 ## 初始化系统
 
-所有机器都需要初始化docker和kubelet。
+所有机器都需要初始化 docker 和 kubelet。
 
 ### ubuntu
 
 ```sh
-# for ubuntu 16.04+
-apt-get update && apt-get install -y apt-transport-https
-curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
-cat <<EOF > /etc/apt/sources.list.d/kubernetes.list
-deb http://apt.kubernetes.io/ kubernetes-xenial main
-EOF
-
+# for ubuntu 16.04
 apt-get update
+apt-get install -y apt-transport-https ca-certificates curl software-properties-common
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
+add-apt-repository "deb https://download.docker.com/linux/$(. /etc/os-release; echo "$ID") $(lsb_release -cs) stable"
+apt-get update && apt-get install -y docker-ce=$(apt-cache madison docker-ce | grep 17.03 | head -1 | awk '{print $3}')
 
-# Install docker if you don't have it already.
-apt-get install -y docker.io
-apt-get install -y kubelet kubeadm kubectl kubernetes-cni
-systemctl enable docker && systemctl start docker
-systemctl enable kubelet
+apt-get update && apt-get install -y apt-transport-https curl
+curl https://mirrors.aliyun.com/kubernetes/apt/doc/apt-key.gpg | apt-key add -
+    cat <<EOF >/etc/apt/sources.list.d/kubernetes.list
+deb https://mirrors.aliyun.com/kubernetes/apt/ kubernetes-xenial main
+EOF
+apt-get update
+apt-get install -y kubelet kubeadm kubectl
 ```
 
-### centos
+### CentOS
 
 ```sh
+yum install -y docker
+systemctl enable docker && systemctl start docker
+
 cat <<EOF > /etc/yum.repos.d/kubernetes.repo
 [kubernetes]
 name=Kubernetes
-baseurl=http://yum.kubernetes.io/repos/kubernetes-el7-x86_64
+baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64/
 enabled=1
 gpgcheck=1
 repo_gpgcheck=1
-gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
-       https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+gpgkey=https://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg https://mirrors.aliyun.com/kubernetes/yum/doc/rpm-package-key.gpg
 EOF
-
 setenforce 0
-yum install -y docker kubelet kubeadm kubectl kubernetes-cni
-systemctl enable docker && systemctl start docker
-systemctl enable kubelet
+sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config
+yum install -y kubelet kubeadm kubectl
+systemctl enable kubelet && systemctl start kubelet
 ```
 
-国内用户也可以使用阿里云的镜像来安装
-
-```sh
-cat <<EOF > /etc/yum.repos.d/kubernetes.repo
-[kubernetes]
-name=Kubernetes
-baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64
-enabled=1
-gpgcheck=0
-EOF
-```
-
-## 安装master
+## 安装 master
 
 ```sh
 # --api-advertise-addresses <ip-address>
@@ -83,80 +78,112 @@ kubeadm init --pod-network-cidr 10.244.0.0/16 --kubernetes-version latest
 
 # enable schedule pods on the master
 export KUBECONFIG=/etc/kubernetes/admin.conf
-# for v1.5-, use kubectl taint nodes --all dedicated-
 kubectl taint nodes --all node-role.kubernetes.io/master:NoSchedule-
 ```
 
-如果需要修改kubernetes服务的配置选项，则需要创建一个MasterConfiguration配置文件，其格式为
+如果需要修改 kubernetes 服务的配置选项，则需要创建一个 kubeadm 配置文件，其格式为
 
 ```yaml
-apiVersion: kubeadm.k8s.io/v1alpha1
-kind: MasterConfiguration
-api:
-  advertiseAddress: <address|string>
-  bindPort: <int>
+apiVersion: kubeadm.k8s.io/v1alpha3
+kind: InitConfiguration
+bootstrapTokens:
+- token: "9a08jv.c0izixklcxtmnze7"
+  description: "kubeadm bootstrap token"
+  ttl: "24h"
+- token: "783bde.3f89s0fje9f38fhf"
+  description: "another bootstrap token"
+  usages:
+  - signing
+  groups:
+  - system:anonymous
+nodeRegistration:
+  name: "ec2-10-100-0-1"
+  criSocket: "/var/run/dockershim.sock"
+  taints:
+  - key: "kubeadmNode"
+    value: "master"
+    effect: "NoSchedule"
+  kubeletExtraArgs:
+    cgroupDriver: "cgroupfs"
+apiEndpoint:
+  advertiseAddress: "10.100.0.1"
+  bindPort: 6443
+---
+apiVersion: kubeadm.k8s.io/v1alpha3
+kind: ClusterConfiguration
 etcd:
-  endpoints:
-  - <endpoint1|string>
-  - <endpoint2|string>
-  caFile: <path|string>
-  certFile: <path|string>
-  keyFile: <path|string>
+  # one of local or external
+  local:
+    image: "k8s.gcr.io/etcd-amd64:3.2.18"
+    dataDir: "/var/lib/etcd"
+    extraArgs:
+      listen-client-urls: "http://10.100.0.1:2379"
+    serverCertSANs:
+    -  "ec2-10-100-0-1.compute-1.amazonaws.com"
+    peerCertSANs:
+    - "10.100.0.1"
+  external:
+    endpoints:
+    - "10.100.0.1:2379"
+    - "10.100.0.2:2379"
+    caFile: "/etcd/kubernetes/pki/etcd/etcd-ca.crt"
+    certFile: "/etcd/kubernetes/pki/etcd/etcd.crt"
+    certKey: "/etcd/kubernetes/pki/etcd/etcd.key"
 networking:
-  dnsDomain: <string>
-  serviceSubnet: <cidr>
-  podSubnet: <cidr>
-kubernetesVersion: <string>
-cloudProvider: <string>
-authorizationModes:
-- <authorizationMode1|string>
-- <authorizationMode2|string>
-token: <string>
-tokenTTL: <time duration>
-selfHosted: <bool>
+  serviceSubnet: "10.96.0.0/12"
+  podSubnet: "10.100.0.1/24"
+  dnsDomain: "cluster.local"
+kubernetesVersion: "v1.12.0"
+controlPlaneEndpoint: "10.100.0.1:6443"
 apiServerExtraArgs:
-  <argument>: <value|string>
-  <argument>: <value|string>
-controllerManagerExtraArgs:
-  <argument>: <value|string>
-  <argument>: <value|string>
+  authorization-mode: "Node,RBAC"
+controlManagerExtraArgs:
+  node-cidr-mask-size: 20
 schedulerExtraArgs:
-  <argument>: <value|string>
-  <argument>: <value|string>
+  address: "10.100.0.1"
+apiServerExtraVolumes:
+- name: "some-volume"
+  hostPath: "/etc/some-path"
+  mountPath: "/etc/some-pod-path"
+  writable: true
+  pathType: File
+controllerManagerExtraVolumes:
+- name: "some-volume"
+  hostPath: "/etc/some-path"
+  mountPath: "/etc/some-pod-path"
+  writable: true
+  pathType: File
+schedulerExtraVolumes:
+- name: "some-volume"
+  hostPath: "/etc/some-path"
+  mountPath: "/etc/some-pod-path"
+  writable: true
+  pathType: File
 apiServerCertSANs:
-- <name1|string>
-- <name2|string>
-certificatesDir: <string>
+- "10.100.1.1"
+- "ec2-10-100-0-1.compute-1.amazonaws.com"
+certificatesDir: "/etc/kubernetes/pki"
+imageRepository: "k8s.gcr.io"
+unifiedControlPlaneImage: "k8s.gcr.io/controlplane:v1.12.0"
+auditPolicy:
+  # https://kubernetes.io/docs/tasks/debug-application-cluster/audit/#audit-policy
+  path: "/var/log/audit/audit.json"
+  logDir: "/var/log/audit"
+  logMaxAge: 7 # in days
+featureGates:
+  selfhosting: false
+clusterName: "example-cluster"
 ```
 
-比如
+> 注意：JoinConfiguration 重命名自 v1alpha2 API 中的 NodeConfiguration，而 InitConfiguration 重命名自 v1alpha2 API 中的 MasterConfiguration。
 
-```yaml
-# cat kubeadm.yml
-kind: MasterConfiguration
-apiVersion: kubeadm.k8s.io/v1alpha1
-kubernetesVersion: "stable"
-apiServerCertSANs: []
-controllerManagerExtraArgs:
-  horizontal-pod-autoscaler-use-rest-clients: "true"
-  horizontal-pod-autoscaler-sync-period: "10s"
-  node-monitor-grace-period: "10s"
-  feature-gates: "AllAlpha=true"
-  enable-dynamic-provisioning: "true"
-apiServerExtraArgs:
-  runtime-config: "api/all=true"
-  feature-gates: "AllAlpha=true"
-networking:
-  podSubnet: "10.244.0.0/16"
-```
-
-然后，在初始化master的时候指定kubeadm.yml的路径：
+然后，在初始化 master 的时候指定 kubeadm.yaml 的路径：
 
 ```sh
 kubeadm init --config ./kubeadm.yaml
 ```
 
-## 配置Network plugin
+## 配置 Network plugin
 
 ### CNI bridge
 
@@ -174,7 +201,7 @@ cat >/etc/cni/net.d/10-mynet.conf <<-EOF
         "type": "host-local",
         "subnet": "10.244.0.0/16",
         "routes": [
-            { "dst": "0.0.0.0/0"  }
+            {"dst": "0.0.0.0/0"}
         ]
     }
 }
@@ -189,68 +216,103 @@ EOF
 
 ### flannel
 
+注意：需要 `kubeadm init` 时设置 `--pod-network-cidr=10.244.0.0/16`
+
 ```sh
-#kubectl apply -f https://gist.githubusercontent.com/feiskyer/1e7a95f27c391a35af47881eb20131d7/raw/4266f05355590fa185bc8e50c0f50d2841993d20/flannel.yaml
-kubectl create -f https://github.com/coreos/flannel/raw/master/Documentation/kube-flannel-rbac.yml
-kubectl create -f https://github.com/coreos/flannel/raw/master/Documentation/kube-flannel.yml
+kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/v0.10.0/Documentation/kube-flannel.yml
 ```
 
 ### weave
 
 ```sh
-# kubectl apply -f https://gist.githubusercontent.com/feiskyer/0b00688584cc7ed9bd9a993adddae5e3/raw/67f3558e32d5c76be38e36ef713cc46deb2a74ca/weave.yaml
-kubectl apply -f https://git.io/weave-kube-1.6
+sysctl net.bridge.bridge-nf-call-iptables=1
+kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')"
 ```
 
 ### calico
 
-```sh
-# kubectl apply -f https://gist.githubusercontent.com/feiskyer/0f952c7dadbfcefd2ce81ba7ea24a8ca/raw/92addea398bbc4d4a1dcff8a98c1ac334c8acb26/calico.yaml
-kubectl apply -f http://docs.projectcalico.org/v2.1/getting-started/kubernetes/installation/hosted/kubeadm/1.6/calico.yaml
-```
-
-## 添加Node
+注意：需要 `kubeadm init` 时设置 `--pod-network-cidr=192.168.0.0/16`
 
 ```sh
-token=$(kubeadm token list | grep authentication,signing | awk '{print $1}')
-kubeadm join --token $token ${master_ip}
+kubectl apply -f https://docs.projectcalico.org/v3.1/getting-started/kubernetes/installation/hosted/rbac-kdd.yaml
+kubectl apply -f https://docs.projectcalico.org/v3.1/getting-started/kubernetes/installation/hosted/kubernetes-datastore/calico-networking/1.7/calico.yaml
 ```
 
-跟Master一样，添加Node的时候也可以自定义Kubernetes服务的选项，格式为
+## 添加 Node
+
+```sh
+kubeadm join --token <token> <master-ip>:<master-port> --discovery-token-ca-cert-hash sha256:<hash>
+```
+
+跟 Master 一样，添加 Node 的时候也可以自定义 Kubernetes 服务的选项，格式为
 
 ```yaml
-apiVersion: kubeadm.k8s.io/v1alpha1
-kind: NodeConfiguration
-caCertPath: <path|string>
-discoveryFile: <path|string>
-discoveryToken: <string>
+apiVersion: kubeadm.k8s.io/v1alpha2
+caCertPath: /etc/kubernetes/pki/ca.crt
+clusterName: kubernetes
+discoveryFile: ""
+discoveryTimeout: 5m0s
+discoveryToken: abcdef.0123456789abcdef
 discoveryTokenAPIServers:
-- <address|string>
-- <address|string>
-tlsBootstrapToken: <string>
+- kube-apiserver:6443
+discoveryTokenUnsafeSkipCAVerification: true
+kind: NodeConfiguration
+nodeRegistration:
+  criSocket: /var/run/dockershim.sock
+  name: thegopher
+tlsBootstrapToken: abcdef.0123456789abcdef
+token: abcdef.0123456789abcdef
 ```
 
-在把Node加入集群的时候，指定NodeConfiguration配置文件的路径
+在把 Node 加入集群的时候，指定 NodeConfiguration 配置文件的路径
 
 ```sh
 kubeadm join --config ./nodeconfig.yml --token $token ${master_ip}
 ```
 
+## Cloud Provider
+
+默认情况下，kubeadm 不包括 Cloud Provider 的配置，在 Azure 或者 AWS 等云平台上运行时，还需要配置 Cloud Provider。如
+
+```yaml
+kind: MasterConfiguration
+apiVersion: kubeadm.k8s.io/v1alpha2
+apiServerExtraArgs:
+  cloud-provider: "{cloud}"
+  cloud-config: "{cloud-config-path}"
+apiServerExtraVolumes:
+- name: cloud
+  hostPath: "{cloud-config-path}"
+  mountPath: "{cloud-config-path}"
+controllerManagerExtraArgs:
+  cloud-provider: "{cloud}"
+  cloud-config: "{cloud-config-path}"
+controllerManagerExtraVolumes:
+- name: cloud
+  hostPath: "{cloud-config-path}"
+  mountPath: "{cloud-config-path}"
+```
+
 ## 删除安装
 
-```
+```sh
+# drain and delete the node first
+kubectl drain <node name> --delete-local-data --force --ignore-daemonsets
+kubectl delete node <node name>
+
+# then reset kubeadm
 kubeadm reset
 ```
 
 ## 动态升级
 
-kubeadm v1.8开始支持动态升级，升级步骤为
+kubeadm v1.8 开始支持动态升级，升级步骤为
 
-* 首先上传kubeadm配置，如`kubeadm config upload from-flags [flags]`（使用命令行参数）或 `kubeadm config upload from-file --config [config]`（使用配置文件）
-* 在master上检查新版本 `kubeadm upgrade plan`， 当有新版本（如v1.8.0）时，执行 `kubeadm upgrade apply v1.8.0` 升级控制平面
-* **手动**升级CNI插件（如果有新版本的话）
-* 添加自动证书回滚的RBAC策略 `kubectl create clusterrolebinding kubeadm:node-autoapprove-certificate-rotation --clusterrole=system:certificates.k8s.io:certificatesigningrequests:selfnodeclient --group=system:nodes`
-* 最后升级kubelet
+* 首先上传 kubeadm 配置，如 `kubeadm config upload from-flags [flags]`（使用命令行参数）或 `kubeadm config upload from-file --config [config]`（使用配置文件）
+* 在 master 上检查新版本 `kubeadm upgrade plan`， 当有新版本（如 v1.8.0）时，执行 `kubeadm upgrade apply v1.8.0` 升级控制平面
+* ** 手动 ** 升级 CNI 插件（如果有新版本的话）
+* 添加自动证书回滚的 RBAC 策略 `kubectl create clusterrolebinding kubeadm:node-autoapprove-certificate-rotation --clusterrole=system:certificates.k8s.io:certificatesigningrequests:selfnodeclient --group=system:nodes`
+* 最后升级 kubelet
 
 ```sh
 $ kubectl drain $HOST --ignore-daemonsets
@@ -258,7 +320,7 @@ $ kubectl drain $HOST --ignore-daemonsets
 # 升级软件包
 $ apt-get update
 $ apt-get upgrade
-# CentOS上面执行yum升级
+# CentOS 上面执行 yum 升级
 # $ yum update
 
 $ kubectl uncordon $HOST
@@ -266,32 +328,32 @@ $ kubectl uncordon $HOST
 
 ### 手动升级
 
-kubeadm v1.7以及以前的版本不支持动态升级，但可以手动升级。
+kubeadm v1.7 以及以前的版本不支持动态升级，但可以手动升级。
 
-#### 升级Master
+#### 升级 Master
 
-假设你已经有一个使用kubeadm部署的Kubernetes v1.6集群，那么升级到v1.7的方法为：
+假设你已经有一个使用 kubeadm 部署的 Kubernetes v1.6 集群，那么升级到 v1.7 的方法为：
 
 1. 升级安装包 `apt-get upgrade && apt-get update`
-2. 重启kubelet `systemctl restart kubelet`
-3. 删除kube-proxy DaemonSet `KUBECONFIG=/etc/kubernetes/admin.conf kubectl delete daemonset kube-proxy -n kube-system`
+2. 重启 kubelet `systemctl restart kubelet`
+3. 删除 kube-proxy DaemonSet `KUBECONFIG=/etc/kubernetes/admin.conf kubectl delete daemonset kube-proxy -n kube-system`
 4. kubeadm init --skip-preflight-checks --kubernetes-version v1.7.1
-5. 更新CNI插件
+5. 更新 CNI 插件
 
-#### 升级Node
+#### 升级 Node
 
 1. 升级安装包 `apt-get upgrade && apt-get update`
-2. 重启kubelet `systemctl restart kubelet`
+2. 重启 kubelet `systemctl restart kubelet`
 
 ## 安全选项
 
-默认情况下，kubeadm会开启Node客户端证书的自动批准，如果不需要的话可以选择关闭，关闭方法为
+默认情况下，kubeadm 会开启 Node 客户端证书的自动批准，如果不需要的话可以选择关闭，关闭方法为
 
 ```sh
 $ kubectl delete clusterrole kubeadm:node-autoapprove-bootstrap
 ```
 
-关闭后，增加新的Node时，`kubeadm join`会阻塞等待管理员手动批准，匹配方法为
+关闭后，增加新的 Node 时，`kubeadm join` 会阻塞等待管理员手动批准，匹配方法为
 
 ```sh
 $ kubectl get csr
@@ -308,7 +370,5 @@ node-csr-c69HXe7aYcqkS1bKmH4faEnHAWxn6i2bHZ2mD04jZyQ   1m        system:bootstra
 
 ## 参考文档
 
-- [kubeadm参考指南](https://kubernetes.io/docs/admin/kubeadm/)
-- [Upgrading kubeadm clusters from 1.7 to 1.8](https://kubernetes.io/docs/tasks/administer-cluster/kubeadm-upgrade-1-8/)
-- [Upgrading kubeadm clusters from 1.6 to 1.7](https://kubernetes.io/docs/tasks/administer-cluster/kubeadm-upgrade-1-7/)
-
+* [kubeadm 参考指南](https://kubernetes.io/docs/admin/kubeadm/)
+* [Upgrading kubeadm clusters from v1.14 to v1.15](https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/kubeadm-upgrade-1-15/)

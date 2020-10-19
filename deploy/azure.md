@@ -2,13 +2,13 @@
 
 Azure 容器服务 (AKS) 是 Microsoft Azure 最近发布的一个托管的 Kubernetes 服务（预览版），它独立于现有的 Azure Container Service （ACS）。借助 AKS 用户无需具备容器业务流程的专业知识就可以快速、轻松的部署和管理容器化的应用程序。AKS 支持自动升级和自动故障修复，按需自动扩展或缩放资源池，消除了用户管理和维护 Kubernetes 集群的负担。并且集群管理本身是免费的，Azure 只收取容器底层的虚拟机的费用。
 
-ACS 是 Microsoft Azure 在2015年推出的容器服务，支持 Kubernetes、DCOS 以及 Dockers Swarm 等多种容器编排工具。并且 ACS 的核心功能是开源的，用户可以通过https://github.com/Azure/acs-engine来查看和下载使用。
+ACS 是 Microsoft Azure 在 2015 年推出的容器服务，支持 Kubernetes、DCOS 以及 Dockers Swarm 等多种容器编排工具。并且 ACS 的核心功能是开源的，用户可以通过 https://github.com/Azure/acs-engine 来查看和下载使用。
 
 ## AKS
 
 ### 基本使用
 
-以下文档假设用户已经安装好了Azure CLI ，如未安装可以参考[这里](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli?view=azure-cli-latest)操作。
+以下文档假设用户已经安装好了 Azure CLI ，如未安装可以参考 [这里](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli?view=azure-cli-latest) 操作。
 
 在创建 AKS 集群之前，首先需要开启容器服务
 
@@ -31,7 +31,7 @@ az group create --name group1 --location centralus
 az aks create --resource-group group1 --name myK8sCluster --node-count 3 --generate-ssh-keys
 ```
 
-稍等一会，集群创建好后安装并配置 kubectl 
+稍等一会，集群创建好后安装并配置 kubectl
 
 ```sh
 # Install kubectl
@@ -40,6 +40,8 @@ az aks install-cli
 # Configure kubectl
 az aks get-credentials --resource-group=group1 --name=myK8sCluster
 ```
+
+> 注意使用 azure-cli 2.0.24 版本时，`az aks get-credentials` 命令可能会失败，解决方法是升级到更新版本，或回退到 2.0.23 版本。
 
 ### 访问 Dashboard
 
@@ -60,15 +62,15 @@ az aks scale --resource-group=group1 --name=myK8SCluster --agent-count 5
 # 查询当前集群的版本以及可升级的版本
 az aks get-versions --name myK8sCluster --resource-group group1 --output table
 
-# 升级到 1.8.1 版本
-az aks upgrade --name myK8sCluster --resource-group group1 --kubernetes-version 1.8.1
+# 升级到 1.11.3 版本
+az aks upgrade --name myK8sCluster --resource-group group1 --kubernetes-version 1.11.3
 ```
 
 下图动态展示了一个部署 v1.7.7 版本集群并升级到 v1.8.1 的过程：
 
 ![](https://feisky.xyz/images/aks-examples.gif)
 
-### 使用Helm
+### 使用 Helm
 
 当然也可以使用其他 Kubernetes 社区提供的工具和服务，比如使用 Helm 部署 Nginx Ingress 控制器
 
@@ -87,9 +89,9 @@ az group delete --name group1 --yes --no-wait
 
 ## acs-engine
 
-虽然未来 AKS 是 Azure 容器服务的下一代主打产品，但用户可能还是希望可以自己管理容器集群以保证足够的灵活性（比如自定义master服务等）。这时用户可以使用开源的 [acs-engine](https://github.com/Azure/acs-engine) 来创建和管理自己的集群。acs-engine 其实就是 ACS 的核心部分，提供了一个部署和管理 Kubernetes、Swarm和DC/OS 集群的命令行工具。它通过将容器集群描述文件转化为一组ARM（Azure Resource Manager）模板来建立容器集群。 
+虽然未来 AKS 是 Azure 容器服务的下一代主打产品，但用户可能还是希望可以自己管理容器集群以保证足够的灵活性（比如自定义 master 服务等）。这时用户可以使用开源的 [acs-engine](https://github.com/Azure/acs-engine) 来创建和管理自己的集群。acs-engine 其实就是 ACS 的核心部分，提供了一个部署和管理 Kubernetes、Swarm 和 DC/OS 集群的命令行工具。它通过将容器集群描述文件转化为一组 ARM（Azure Resource Manager）模板来建立容器集群。
 
-在 acs-engine 中，每个集群都通过一个json文件来描述，比如一个Kubernetes集群可以描述为
+在 acs-engine 中，每个集群都通过一个 json 文件来描述，比如一个 Kubernetes 集群可以描述为
 
 ```sh
 {
@@ -97,7 +99,7 @@ az group delete --name group1 --yes --no-wait
   "properties": {
     "orchestratorProfile": {
       "orchestratorType": "Kubernetes",
-      "orchestratorRelease": "1.8",
+      "orchestratorRelease": "1.12",
       "kubernetesConfig": {
         "networkPolicy": "",
         "enableRbac": true
@@ -154,9 +156,9 @@ export KUBECONFIG="$(pwd)/_output/<name-with-suffix>/kubeconfig/kubeconfig.centr
 kubectl get node
 ```
 
-### 开启RBAC
+### 开启 RBAC
 
-RBAC默认是不可以开启的，可以通过设置enableRbac开启
+RBAC 默认是不可以开启的，可以通过设置 enableRbac 开启
 
 ```json
      "kubernetesConfig": {
@@ -164,14 +166,14 @@ RBAC默认是不可以开启的，可以通过设置enableRbac开启
       }
 ```
 
-### 自定义Kubernetes版本
+### 自定义 Kubernetes 版本
 
 acs-engine 基于 hyperkube 来部署 Kubernetes 服务，所以只需要使用自定义的 hyperkube 镜像即可。
 
 ```json
 {
 	"kubernetesConfig": {
-		"customHyperkubeImage": "docker.io/feisky/hyperkube-amd64:v1.9.0-dev"
+		"customHyperkubeImage": "docker.io/feisky/hyperkube-amd64:v1.12.1"
 	}
 }
 ```
@@ -184,17 +186,17 @@ bash build/run.sh make KUBE_FASTBUILD=true ARCH=amd64
 
 # Build docker image for hyperkube
 cd cluster/images/hyperkube
-make VERSION=v1.9.0-dev
+make VERSION=v1.12.x-dev
 cd ../../..
 
 # push docker image
-docker tag gcr.io/google-containers/hyperkube-amd64:v1.9.0-dev feisky/hyperkube-amd64:v1.9.0-dev
-docker push feisky/hyperkube-amd64:v1.9.0-dev
+docker tag gcr.io/google-containers/hyperkube-amd64:v1.12.x-dev feisky/hyperkube-amd64:v1.12.x-dev
+docker push feisky/hyperkube-amd64:v1.12.x-dev
 ```
 
-### 添加Windows节点
+### 添加 Windows 节点
 
-可以通过设置 osType 来添加Windows节点（完整示例见[这里](https://github.com/Azure/acs-engine/blob/master/examples/windows/kubernetes.json)）
+可以通过设置 osType 来添加 Windows 节点（完整示例见 [这里](https://github.com/Azure/acs-engine/blob/master/examples/windows/kubernetes.json)）
 
 ```json
     "agentPoolProfiles": [
@@ -212,15 +214,15 @@ docker push feisky/hyperkube-amd64:v1.9.0-dev
     },
 ```
 
-### 使用GPU
+### 使用 GPU
 
-设置 vmSize 为`Standard_NC*` 或  `Standard_NV*` 会自动配置GPU，并自动安装所需要的 NVDIA 驱动。
+设置 vmSize 为 `Standard_NC*` 或  `Standard_NV*` 会自动配置 GPU，并自动安装所需要的 NVDIA 驱动。
 
 ### 自定义网络插件
 
-acs-engine 默认使用 kubenet 网络插件，并通过用户自定义的路由以及IP-forwarding转发Pod网络。此时，Pod网络与Node网络在不同的子网中，Pod不受VNET管理。
+acs-engine 默认使用 kubenet 网络插件，并通过用户自定义的路由以及 IP-forwarding 转发 Pod 网络。此时，Pod 网络与 Node 网络在不同的子网中，Pod 不受 VNET 管理。
 
-用户还可以使用 [Azure CNI plugin](https://github.com/Azure/azure-container-networking) 插件将Pod连接到Azure VNET中
+用户还可以使用 [Azure CNI plugin](https://github.com/Azure/azure-container-networking) 插件将 Pod 连接到 Azure VNET 中
 
 ```json
 "properties": {
@@ -233,7 +235,7 @@ acs-engine 默认使用 kubenet 网络插件，并通过用户自定义的路由
 }
 ```
 
-也可以使用calico网络插件
+也可以使用 calico 网络插件
 
 ```json
 "properties": {
@@ -278,12 +280,12 @@ Azure 容器实例（ACI）提供了在 Azure 中运行容器的最简捷方式�
 
 ```sh
 RELEASE_NAME=virtual-kubelet
-CHART_URL=https://github.com/virtual-kubelet/virtual-kubelet/raw/master/charts/virtual-kubelet-0.1.0.tgz
+CHART_URL=https://github.com/virtual-kubelet/virtual-kubelet/raw/master/charts/virtual-kubelet-0.4.0.tgz
 
 helm install "$CHART_URL" --name "$RELEASE_NAME" --namespace kube-system --set env.azureClientId=<YOUR-AZURECLIENTID-HERE>,env.azureClientKey=<YOUR-AZURECLIENTKEY-HERE>,env.azureTenantId=<YOUR-AZURETENANTID-HERE>,env.azureSubscriptionId=<YOUR-AZURESUBSCRIPTIONID-HERE>,env.aciResourceGroup=<YOUR-ACIRESOURCEGROUP-HERE>,env.nodeName=aci, env.nodeOsType=<Linux|Windows>,env.nodeTaint=azure.com/aci
 ```
 
-在开启 RBAC 的集群中，还需要给 virtual-kubelet 开启对应的权限。最简单的方法是给 service account `kube-system:default ` 设置 admin权限（不推荐生产环境这么设置，应该设置具体的权限），比如
+在开启 RBAC 的集群中，还需要给 virtual-kubelet 开启对应的权限。最简单的方法是给 service account `kube-system:default ` 设置 admin 权限（不推荐生产环境这么设置，应该设置具体的权限），比如
 
 ```sh
 kubectl create clusterrolebinding virtual-kubelet-cluster-admin-binding --clusterrole=cluster-admin --serviceaccount=kube-system:default
@@ -297,7 +299,7 @@ NAME      STATUS    ROLES     AGE       VERSION
 aci       Ready     agent     34s       v1.8.3
 ```
 
-此时，就可以通过**指定 nodeName 或者容忍 taint `azure.com/aci=NoSchedule` 调度**到 ACI 上面。比如
+此时，就可以通过 ** 指定 nodeName 或者容忍 taint `azure.com/aci=NoSchedule` 调度 ** 到 ACI 上面。比如
 
 ```yaml
 apiVersion: v1
@@ -325,7 +327,7 @@ spec:
 
 ## 参考文档
 
-- [AKS – Managed Kubernetes on Azure](https://www.reddit.com/r/AZURE/comments/7d7diz/ama_aks_managed_kubernetes_on_azure/) 
+- [AKS – Managed Kubernetes on Azure](https://www.reddit.com/r/AZURE/comments/7d7diz/ama_aks_managed_kubernetes_on_azure/)
 - [Azure Container Service (AKS)](https://docs.microsoft.com/en-us/azure/aks/)
 - [Azure/acs-engine Github](https://github.com/Azure/acs-engine)
-- [acs-engine/examples](https://github.com/Azure/acs-engine/tree/master/examples) 
+- [acs-engine/examples](https://github.com/Azure/acs-engine/tree/master/examples)

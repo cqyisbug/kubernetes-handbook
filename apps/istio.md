@@ -1,326 +1,138 @@
-# Istio和Service Mesh
+# Istio 和 Service Mesh
 
-Istio是Google、IBM和Lyft联合开源的微服务 Service Mesh 框架，旨在解决大量微服务的发现、连接、管理、监控以及安全等问题。Istio对应用是透明的，不需要改动任何服务代码就可以实现透明的服务治理。
+Istio 是 Google、IBM 和 Lyft 联合开源的服务网格（Service Mesh）框架，旨在解决大量微服务的发现、连接、管理、监控以及安全等问题。Istio 对应用是透明的，不需要改动任何服务代码就可以实现透明的服务治理。
 
-Istio的主要特性包括：
+Istio 的主要特性包括：
 
-- HTTP、gRPC和TCP网络流量的自动负载均衡
-- 丰富的路由规则，细粒度的网络流量行为控制
-- 流量加密、服务间认证，以及强身份声明
-- 全范围（Fleet-wide）策略执行
-- 深度遥测和报告
+- HTTP、gRPC、WebSocket 和 TCP 网络流量的自动负载均衡
+- 细粒度的网络流量行为控制， 包括丰富的路由规则、重试、故障转移和故障注入等
+- 可选策略层和配置 API 支持访问控制、速率限制以及配额管理
+- 自动度量、日志记录和跟踪所有进出的流量
+- 强大的身份认证和授权机制实现服务间的安全通信
 
-## Istio原理
+## Istio 原理
 
-Istio从逻辑上可以分为数据平面和控制平面：
+Istio 从逻辑上可以分为数据平面和控制平面：
 
-- 数据平面主要由一系列的智能代理（Envoy）组成，管理微服务之间的网络通信
-- 控制平面负责管理和配置这些智能代理，并动态执行策略
+- **数据平面**主要由一系列的智能代理（默认为 Envoy）组成，管理微服务之间的网络通信
+- **控制平面**负责管理和配置代理来路由流量，并配置 Mixer 以进行策略部署和遥测数据收集
 
-Istio架构可以如下图所示
+Istio 架构可以如下图所示
 
-![](images/istio.png)
+![](images/istio-arch.png)
 
-主要由以下组件构成
+它主要由以下组件构成
 
-- [Envoy](https://lyft.github.io/envoy/)：Lyft开源的高性能代理总线，支持动态服务发现、负载均衡、TLS终止、HTTP/2和gPRC代理、健康检查、性能测量等功能。Envoy以sidecar的方式部署在相关的服务的Pod中。
-- Mixer：负责访问控制、执行策略并从Envoy代理中收集遥测数据。Mixer支持灵活的插件模型，方便扩展（支持GCP、AWS、Prometheus、Heapster等多种后端）
-- Istio-Auth：提供服务间和终端用户的认证机制
-- Pilot：动态管理Envoy示例的生命周期，提供服务发现、流量管理、智能路由以及超时、熔断等弹性控制的功能。其与Envoy的关系如下图所示
+- [Envoy](https://www.envoyproxy.io//)：Lyft 开源的高性能代理，用于调解服务网格中所有服务的入站和出站流量。它支持动态服务发现、负载均衡、TLS 终止、HTTP/2 和 gPRC 代理、熔断、健康检查、故障注入和性能测量等丰富的功能。Envoy 以 sidecar 的方式部署在相关的服务的 Pod 中，从而无需重新构建或重写代码。
+- Mixer：负责访问控制、执行策略并从 Envoy 代理中收集遥测数据。Mixer 支持灵活的插件模型，方便扩展（支持 GCP、AWS、Prometheus、Heapster 等多种后端）。
+- Pilot：动态管理 Envoy 实例的生命周期，提供服务发现、智能路由和弹性流量管理（如超时、重试）等功能。它将流量管理策略转化为 Envoy 数据平面配置，并传播到 sidecar 中。
+- [Pilot](https://istio.io/zh/docs/concepts/traffic-management/#pilot-%E5%92%8C-envoy) 为 Envoy sidecar 提供服务发现功能，为智能路由（例如 A/B 测试、金丝雀部署等）和弹性（超时、重试、熔断器等）提供流量管理功能。它将控制流量行为的高级路由规则转换为特定于 Envoy 的配置，并在运行时将它们传播到 sidecar。Pilot 将服务发现机制抽象为符合 [Envoy 数据平面 API](https://github.com/envoyproxy/data-plane-api) 的标准格式，以便支持在多种环境下运行并保持流量管理的相同操作接口。
+- Citadel 通过内置身份和凭证管理提供服务间和最终用户的身份认证。支持基于角色的访问控制、基于服务标识的策略执行等。
 
 ![](images/istio-service.png)
 
-在数据平面上，除了[Envoy](https://lyft.github.io/envoy/)，还可以选择使用 [nginxmesh](https://github.com/nginmesh/nginmesh) 和 [linkerd](https://linkerd.io/getting-started/istio/) 作为网络代理。比如，使用nginxmesh时，Istio的控制平面（Pilot、Mixer、Auth）保持不变，但用Nginx Sidecar取代Envoy：
+在数据平面上，除了 [Envoy](https://www.envoyproxy.io)，还可以选择使用 [nginxmesh](https://github.com/nginmesh/nginmesh)、[linkerd](https://linkerd.io/getting-started) 等作为网络代理。比如，使用 nginxmesh 时，Istio 的控制平面（Pilot、Mixer、Auth）保持不变，但用 Nginx Sidecar 取代 Envoy：
 
 ![](images/nginx_sidecar.png)
 
 ## 安装
 
-> Istio目前仅支持Kubernetes，在部署Istio之前需要先部署好Kubernetes集群并配置好kubectl客户端。
+Istio 的安装部署步骤见 [这里](istio-deploy.md)。
 
-### 下载Istio
+## 注入 Sidecar 容器前对 Pod 的要求
 
-```sh
-curl -L https://git.io/getLatestIstio | sh -
-cd istio-0.2.12/
-cp bin/istioctl /usr/local/bin
-```
+为 Pod 注入 Sidecar 容器后才能成为服务网格的一部分。Istio 要求 Pod 必须满足以下条件：
 
-### 部署Istio服务
+- Pod 要关联服务并且必须属于单一的服务，不支持属于多个服务的 Pod
+- 端口必须要命名，格式为 `<协议>[-<后缀>]`，其中协议包括 `http`、`http2`、`grpc`、`mongo` 以及 `redis`。否则会被视为 TCP 流量
+- 推荐所有 Deployment 中增加 `app` 标签，用来在分布式跟踪中添加上下文信息
 
-两种方式（选择其一执行）
+## 示例应用
 
-- 禁止Auth：`kubectl apply -f install/kubernetes/istio.yaml`
-- 启用Auth：`kubectl apply -f install/kubernetes/istio-auth.yaml`
+> 以下步骤假设命令行终端在 [安装部署](istio-deploy.md) 时下载的 `istio-${ISTIO_VERSION}` 目录中。
 
-部署完成后，可以检查 isotio-system namespace 中的服务是否正常运行：
+### 手动注入 sidecar 容器
 
-```sh
-$ kubectl -n istio-system get pod
-NAME                             READY     STATUS    RESTARTS   AGE
-istio-ca-5cd46b967c-q5th6        1/1       Running   0          3m
-istio-egress-56c4d999bc-82js4    1/1       Running   0          3m
-istio-ingress-5747bb855f-tv98x   1/1       Running   0          3m
-istio-mixer-77487797f6-cwtqt     2/2       Running   0          3m
-istio-pilot-86ddcb7ff5-t2zpk     1/1       Running   0          3m
-```
-
-### 部署Prometheus、Grafana和Zipkin插件
+在部署应用时，可以通过 `istioctl kube-inject` 给 Pod 手动插入 Envoy sidecar 容器，即
 
 ```sh
-kubectl apply -f install/kubernetes/addons/grafana.yaml
-kubectl apply -f install/kubernetes/addons/servicegraph.yaml
-kubectl apply -f install/kubernetes/addons/zipkin.yaml
-kubectl apply -f install/kubernetes/addons/prometheus.yaml
-# kubectl apply -f install/kubernetes/addons/zipkin-to-stackdriver.yaml
-```
+$  kubectl apply -f <(istioctl kube-inject --debug -f samples/bookinfo/platform/kube/bookinfo.yaml)
+service "details" configured
+deployment.extensions "details-v1" configured
+service "ratings" configured
+deployment.extensions "ratings-v1" configured
+service "reviews" configured
+deployment.extensions "reviews-v1" configured
+deployment.extensions "reviews-v2" configured
+deployment.extensions "reviews-v3" configured
+service "productpage" configured
+deployment.extensions "productpage-v1" configured
+ingress.extensions "gateway" configured
 
-等一会所有Pod启动后，可以通过NodePort或负载均衡服务的外网IP来访问这些服务。比如通过NodePort方式，先查询服务的NodePort
-
-```sh
-$ kubectl -n istio-system get svc grafana -o jsonpath='{.spec.ports[0].nodePort}'
-32070
-$ kubectl -n istio-system get svc servicegraph -o jsonpath='{.spec.ports[0].nodePort}'
-31072
-$ kubectl -n istio-system get svc zipkin -o jsonpath='{.spec.ports[0].nodePort}'
-30032
-$ kubectl -n istio-system get svc prometheus -o jsonpath='{.spec.ports[0].nodePort}'
-30890
-```
-
-通过`http://<kubernetes-ip>:32070/dashboard/db/istio-dashboard`访问Grafana服务
-
-![](images/grafana.png)
-
-通过`http://<kubernetes-ip>:31072/dotviz`访问ServiceGraph服务，展示服务之间调用关系图
-
-![](images/servicegraph.png)
-
-通过`http://<kubernetes-ip>:30032`访问Zipkin跟踪页面
-
-![](images/zipkin.png)
-
-通过`http://<kubernetes-ip>:30890`访问Prometheus页面
-
-![](images/prometheus.png)
-
-## 部署示例应用
-
-在部署应用时，需要通过`istioctl kube-inject`给Pod自动插入Envoy容器，即
-
-```sh
-wget https://raw.githubusercontent.com/istio/istio/master/blog/bookinfo-v1.yaml
-# inject with istioctl
-kubectl apply -f <(istioctl kube-inject -f bookinfo-v1.yaml)
-
-# create ingress
-cat <<EOF | kubectl create -f -
-apiVersion: extensions/v1beta1
-kind: Ingress
-metadata:
- name: bookinfo
- annotations:
-   kubernetes.io/ingress.class: "istio"
-spec:
- rules:
- - http:
-     paths:
-     - path: /productpage
-       backend:
-         serviceName: productpage
-         servicePort: 9080
-     - path: /login
-       backend:
-         serviceName: productpage
-         servicePort: 9080
-     - path: /logout
-       backend:
-         serviceName: productpage
-         servicePort: 9080
-EOF
+$ kubectl apply -f samples/bookinfo/networking/bookinfo-gateway.yaml
 ```
 
 原始应用如下图所示
 
 ![](images/bookinfo.png)
 
-`istioctl kube-inject`在原始应用的每个Pod中插入了一个Envoy容器
+`istioctl kube-inject` 在原始应用的每个 Pod 中插入了一个 Envoy 容器
 
 ![](images/bookinfo2.png)
 
-服务启动后，可以通过Ingress地址`http://<ingress-address>/productpage`来访问BookInfo应用
+服务启动后，可以通过 Gateway 地址 `http://<gateway-address>/productpage` 来访问 BookInfo 应用：
 
 ```sh
-$ kubectl describe ingress
-Name:			gateway
-Namespace:		default
-Address:		192.168.0.77
-Default backend:	default-http-backend:80 (10.8.0.4:8080)
-Rules:
-  Host	Path	Backends
-  ----	----	--------
-  *
-    	/productpage 	productpage:9080 (<none>)
-    	/login 		productpage:9080 (<none>)
-    	/logout 	productpage:9080 (<none>)
-Annotations:
-Events:	<none>
+$ kubectl get svc istio-ingressgateway -n istio-system
+kubectl get svc istio-ingressgateway -n istio-system
+NAME                   TYPE           CLUSTER-IP    EXTERNAL-IP    PORT(S)                                                                                                     AGE
+istio-ingressgateway   LoadBalancer   10.0.203.82   x.x.x.x        80:31380/TCP,443:31390/TCP,31400:31400/TCP,15011:31720/TCP,8060:31948/TCP,15030:32340/TCP,15031:31958/TCP   2h
 ```
 
 ![](images/productpage.png)
 
-## 金丝雀部署
+默认情况下，三个版本的 reviews 服务以负载均衡的方式轮询。
 
-首先部署v2版本的应用，并配置默认路由到v1版本：
+### 自动注入 sidecar 容器
 
-```sh
-wget https://raw.githubusercontent.com/istio/istio/master/blog/bookinfo-ratings.yaml
-kubectl apply -f <(istioctl kube-inject -f bookinfo-ratings.yaml)
-
-wget https://raw.githubusercontent.com/istio/istio/master/blog/bookinfo-reviews-v2.yaml
-kubectl apply -f <(istioctl kube-inject -f bookinfo-reviews-v2.yaml)
-
-# create default route
-cat <<EOF | istioctl create -f -
-apiVersion: config.istio.io/v1alpha2
-kind: RouteRule
-metadata:
-  name: reviews-default
-spec:
-  destination:
-    name: reviews
-  route:
-  - labels:
-      version: v1
-    weight: 100
-EOF
-```
-
-示例一：将 10% 请求发送到 v2 版本而其余 90% 发送到 v1 版本
+首先确认 `admissionregistration` API 已经开启：
 
 ```sh
-cat <<EOF | istioctl create -f -
-apiVersion: config.istio.io/v1alpha2
-kind: RouteRule
-metadata:
-  name: reviews-default
-spec:
-  destination:
-    name: reviews
-  route:
-  - labels:
-      version: v2
-    weight: 10
-  - labels:
-      version: v1
-    weight: 90
-EOF
+$ kubectl api-versions | grep admissionregistration
+admissionregistration.k8s.io/v1beta1
 ```
 
-示例二：将特定用户的请求全部发到 v2 版本
+然后确认 istio-sidecar-injector 正常运行
 
 ```sh
-
-cat <<EOF | istioctl create -f -
-apiVersion: config.istio.io/v1alpha2
-kind: RouteRule
-metadata:
- name: reviews-test-v2
-spec:
- destination:
-   name: reviews
- precedence: 2
- match:
-   request:
-     headers:
-       cookie:
-         regex: "^(.*?;)?(user=jason)(;.*)?$"
- route:
- - labels:
-     version: v2
-   weight: 100
-EOF
+# Conform istio-sidecar-injector is working
+$ kubectl -n istio-system get deploy istio-sidecar-injector
+NAME                     DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+istio-sidecar-injector   1         1         1            1           4m
 ```
 
-示例三：全部切换到 v2 版本
+为需要自动注入 sidecar 的 namespace 加上标签 `istio-injection=enabled`：
 
 ```sh
-cat <<EOF | istioctl replace -f -
-apiVersion: config.istio.io/v1alpha2
-kind: RouteRule
-metadata:
-  name: reviews-default
-spec:
-  destination:
-    name: reviews
-  route:
-  - labels:
-      version: v2
-    weight: 100
-EOF
+# default namespace 没有 istio-injection 标签
+$ kubectl get namespace -L istio-injection
+NAME           STATUS        AGE       ISTIO-INJECTION
+default        Active        1h
+istio-system   Active        1h
+kube-public    Active        1h
+kube-system    Active        1h
+
+# 打上 istio-injection=enabled 标签
+$ kubectl label namespace default istio-injection=enabled
 ```
 
-示例四：限制并发访问
-
-```sh
-# configure a memquota handler with rate limits
-cat <<EOF | istioctl create -f -
-apiVersion: "config.istio.io/v1alpha2"
-kind: memquota
-metadata:
- name: handler
- namespace: default
-spec:
- quotas:
- - name: requestcount.quota.default
-   maxAmount: 5000
-   validDuration: 1s
-   overrides:
-   - dimensions:
-       destination: ratings
-     maxAmount: 1
-     validDuration: 1s
-EOF
-
-# create quota instance that maps incoming attributes to quota dimensions, and createrule that uses it with the memquota handler
-cat <<EOF | istioctl create -f -
-apiVersion: "config.istio.io/v1alpha2"
-kind: quota
-metadata:
- name: requestcount
- namespace: default
-spec:
- dimensions:
-   source: source.labels["app"] | source.service | "unknown"
-   sourceVersion: source.labels["version"] | "unknown"
-   destination: destination.labels["app"] | destination.service | "unknown"
-   destinationVersion: destination.labels["version"] | "unknown"
----
-apiVersion: "config.istio.io/v1alpha2"
-kind: rule
-metadata:
- name: quota
- namespace: default
-spec:
- actions:
- - handler: handler.memquota
-   instances:
-   - requestcount.quota
-EOF
-```
-
-为了查看访问次数限制的效果，可以使用 [wrk](https://github.com/wg/wrk) 给应用加一些压力：
-
-```sh
-export BOOKINFO_URL=$(kubectl get po -n istio-system -l istio=ingress -o jsonpath={.items[0].status.hostIP}):$(kubectl get svc -n istio-system istio-ingress -o jsonpath={.spec.ports[0].nodePort})
-wrk -t1 -c1 -d20s http://$BOOKINFO_URL/productpage
-```
+这样，在 default namespace 中创建 Pod 后自动添加 istio sidecar 容器。
 
 ## 参考文档
 
 - <https://istio.io/>
 - [Istio - A modern service mesh](https://istio.io/talks/istio_talk_gluecon_2017.pdf)
-- <https://lyft.github.io/envoy/>
+- <https://www.envoyproxy.io/>
 - <https://github.com/nginmesh/nginmesh>
 - [WHAT’S A SERVICE MESH? AND WHY DO I NEED ONE?](https://buoyant.io/2017/04/25/whats-a-service-mesh-and-why-do-i-need-one/)
 - [A SERVICE MESH FOR KUBERNETES](https://buoyant.io/2016/10/04/a-service-mesh-for-kubernetes-part-i-top-line-service-metrics/)

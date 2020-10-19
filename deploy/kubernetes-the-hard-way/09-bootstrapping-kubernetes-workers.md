@@ -1,47 +1,50 @@
+# 部署 Kubernetes Workers 节点
 
-#  启动 Kubernetes Worker 节点
-在本次实验中,你将会新建并启动三个Kubernetes work 节点。
+本部分将会部署三个 Kubernetes Worker 节点。每个节点上将会安装以下服务：[runc](https://github.com/opencontainers/runc), [gVisor](https://github.com/google/gvisor), [container networking plugins](https://github.com/containernetworking/cni), [containerd](https://github.com/containerd/containerd), [kubelet](https://kubernetes.io/docs/admin/kubelet), 和 [kube-proxy](https://kubernetes.io/docs/concepts/cluster-administration/proxies)。
 
-以下组件将会被安装到各个节点: [runc](https://github.com/opencontainers/runc), [container networking plugins](https://github.com/containernetworking/cni), [cri-containerd](https://github.com/kubernetes-incubator/cri-containerd), [kubelet](https://kubernetes.io/docs/admin/kubelet), and [kube-proxy](https://kubernetes.io/docs/concepts/cluster-administration/proxies)
+## 事前准备
 
+以下命令需要在所有 worker 节点上面都运行一遍，包括 `worker-0`, `worker-1` 和 `worker-2`。可以使用 `gcloud` 命令登录到 worker 节点上，比如
 
-## 事前準备
-
-这次的指令必须在每个 worker 节点上使用: `worker-0`, `worker-1`, and `worker-2`。使用 `gcloud` 的指令登入每个 worker 节点。
-
-例如:
-
-```
+```sh
 gcloud compute ssh worker-0
 ```
 
-## 建立 Kubernetes Worker 节点
+可以使用 tmux 同时登录到三个 Worker 节点上，加快部署步骤。
 
-安装 OS 的相关套件:
+## 部署 Kubernetes Worker 节点
 
+安装 OS 依赖组件：
 
+```sh
+sudo apt-get update
+sudo apt-get -y install socat conntrack ipset
 ```
-sudo apt-get -y install socat
+
+> socat 命令用于支持 `kubectl port-forward` 命令。
+
+### 禁止 Swap
+
+```sh
+sudo swapoff -a
 ```
 
-> socat 执行档可支援 `kubectl port-forward` 指令
+### 下载并安装 worker 二进制文件
 
-### 下载并安装 worker 执行档
-
-
-```
+```sh
 wget -q --show-progress --https-only --timestamping \
-  https://github.com/containernetworking/plugins/releases/download/v0.6.0/cni-plugins-amd64-v0.6.0.tgz \
-  https://github.com/kubernetes-incubator/cri-containerd/releases/download/v1.0.0-alpha.0/cri-containerd-1.0.0-alpha.0.tar.gz \
-  https://storage.googleapis.com/kubernetes-release/release/v1.8.0/bin/linux/amd64/kubectl \
-  https://storage.googleapis.com/kubernetes-release/release/v1.8.0/bin/linux/amd64/kube-proxy \
-  https://storage.googleapis.com/kubernetes-release/release/v1.8.0/bin/linux/amd64/kubelet
+  https://github.com/kubernetes-sigs/cri-tools/releases/download/v1.18.0/crictl-v1.18.0-linux-amd64.tar.gz \
+  https://github.com/opencontainers/runc/releases/download/v1.0.0-rc91/runc.amd64 \
+  https://github.com/containernetworking/plugins/releases/download/v0.8.6/cni-plugins-linux-amd64-v0.8.6.tgz \
+  https://github.com/containerd/containerd/releases/download/v1.3.6/containerd-1.3.6-linux-amd64.tar.gz \
+  https://storage.googleapis.com/kubernetes-release/release/v1.18.6/bin/linux/amd64/kubectl \
+  https://storage.googleapis.com/kubernetes-release/release/v1.18.6/bin/linux/amd64/kube-proxy \
+  https://storage.googleapis.com/kubernetes-release/release/v1.18.6/bin/linux/amd64/kubelet
 ```
 
-建立 安装目录:
+创建安装目录：
 
-
-```
+```sh
 sudo mkdir -p \
   /etc/cni/net.d \
   /opt/cni/bin \
@@ -51,39 +54,34 @@ sudo mkdir -p \
   /var/run/kubernetes
 ```
 
-安装 worker 执行档:
+安装 worker 二进制文件
 
-```
-sudo tar -xvf cni-plugins-amd64-v0.6.0.tgz -C /opt/cni/bin/
-```
-
-```
-sudo tar -xvf cri-containerd-1.0.0-alpha.0.tar.gz -C /
-```
-
-```
-chmod +x kubectl kube-proxy kubelet
-```
-
-```
-sudo mv kubectl kube-proxy kubelet /usr/local/bin/
+```sh
+{
+  mkdir containerd
+  tar -xvf crictl-v1.18.0-linux-amd64.tar.gz
+  tar -xvf containerd-1.3.6-linux-amd64.tar.gz -C containerd
+  sudo tar -xvf cni-plugins-linux-amd64-v0.8.6.tgz -C /opt/cni/bin/
+  sudo mv runc.amd64 runc
+  chmod +x crictl kubectl kube-proxy kubelet runc
+  sudo mv crictl kubectl kube-proxy kubelet runc /usr/local/bin/
+  sudo mv containerd/bin/* /bin/
+}
 ```
 
+### 配置 CNI 网路
 
-### 设定 CNI 网路
+查询当前计算节点的 Pod CIDR 范围：
 
-取得目前Pod CDIR 范围给当前的计算节点:
-
-```
+```sh
 POD_CIDR=$(curl -s -H "Metadata-Flavor: Google" \
   http://metadata.google.internal/computeMetadata/v1/instance/attributes/pod-cidr)
 ```
 
-建立 `bridge` network 设定档:
+生成 `bridge` 网络插件配置文件
 
-
-```
-cat > 10-bridge.conf <<EOF
+```sh
+cat <<EOF | sudo tee /etc/cni/net.d/10-bridge.conf
 {
     "cniVersion": "0.3.1",
     "name": "bridge",
@@ -102,68 +100,107 @@ cat > 10-bridge.conf <<EOF
 EOF
 ```
 
-建立 `loopback` network 设定档:
+生成 `loopback` 网络插件配置文件
 
-
-
-```
-cat > 99-loopback.conf <<EOF
+```sh
+cat <<EOF | sudo tee /etc/cni/net.d/99-loopback.conf
 {
     "cniVersion": "0.3.1",
+    "name": "lo",
     "type": "loopback"
 }
 EOF
 ```
-移动网路相关部份的设定挡到CNI的设定资料夹目录下:
-```
-sudo mv 10-bridge.conf 99-loopback.conf /etc/cni/net.d/
+
+### 配置 containerd
+
+```sh
+sudo mkdir -p /etc/containerd/
+cat << EOF | sudo tee /etc/containerd/config.toml
+[plugins]
+  [plugins.cri.containerd]
+    snapshotter = "overlayfs"
+    [plugins.cri.containerd.default_runtime]
+      runtime_type = "io.containerd.runtime.v1.linux"
+      runtime_engine = "/usr/local/bin/runc"
+      runtime_root = ""
+EOF
+
+cat <<EOF | sudo tee /etc/systemd/system/containerd.service
+[Unit]
+Description=containerd container runtime
+Documentation=https://containerd.io
+After=network.target
+
+[Service]
+ExecStartPre=/sbin/modprobe overlay
+ExecStart=/bin/containerd
+Restart=always
+RestartSec=5
+Delegate=yes
+KillMode=process
+OOMScoreAdjust=-999
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
 ```
 
-### 设定 Kubelet
+### 配置 Kubelet
 
-
-
-```
-sudo mv ${HOSTNAME}-key.pem ${HOSTNAME}.pem /var/lib/kubelet/
-```
-
-```
-sudo mv ${HOSTNAME}.kubeconfig /var/lib/kubelet/kubeconfig
+```sh
+{
+  sudo mv ${HOSTNAME}-key.pem ${HOSTNAME}.pem /var/lib/kubelet/
+  sudo mv ${HOSTNAME}.kubeconfig /var/lib/kubelet/kubeconfig
+  sudo mv ca.pem /var/lib/kubernetes/
+}
 ```
 
-```
-sudo mv ca.pem /var/lib/kubernetes/
-```
+生成 `kubelet.service` systemd 配置文件：
 
-建立 `kubelet.service` systemd unit file:
+```sh
+# The resolvConf configuration is used to avoid loops when using CoreDNS for service discovery on systems running systemd-resolved.
+cat <<EOF | sudo tee /var/lib/kubelet/kubelet-config.yaml
+kind: KubeletConfiguration
+apiVersion: kubelet.config.k8s.io/v1beta1
+authentication:
+  anonymous:
+    enabled: false
+  webhook:
+    enabled: true
+  x509:
+    clientCAFile: "/var/lib/kubernetes/ca.pem"
+authorization:
+  mode: Webhook
+clusterDomain: "cluster.local"
+clusterDNS:
+  - "10.32.0.10"
+podCIDR: "${POD_CIDR}"
+resolvConf: "/run/systemd/resolve/resolv.conf"
+runtimeRequestTimeout: "15m"
+tlsCertFile: "/var/lib/kubelet/${HOSTNAME}.pem"
+tlsPrivateKeyFile: "/var/lib/kubelet/${HOSTNAME}-key.pem"
+EOF
 
-```
-cat > kubelet.service <<EOF
+cat <<EOF | sudo tee /etc/systemd/system/kubelet.service
 [Unit]
 Description=Kubernetes Kubelet
-Documentation=https://github.com/GoogleCloudPlatform/kubernetes
-After=cri-containerd.service
-Requires=cri-containerd.service
+Documentation=https://github.com/kubernetes/kubernetes
+After=containerd.service
+Requires=containerd.service
 
 [Service]
 ExecStart=/usr/local/bin/kubelet \\
-  --allow-privileged=true \\
-  --anonymous-auth=false \\
-  --authorization-mode=Webhook \\
-  --client-ca-file=/var/lib/kubernetes/ca.pem \\
-  --cluster-dns=10.32.0.10 \\
-  --cluster-domain=cluster.local \\
+  --config=/var/lib/kubelet/kubelet-config.yaml \\
   --container-runtime=remote \\
-  --container-runtime-endpoint=unix:///var/run/cri-containerd.sock \\
+  --container-runtime-endpoint=unix:///var/run/containerd/containerd.sock \\
   --image-pull-progress-deadline=2m \\
   --kubeconfig=/var/lib/kubelet/kubeconfig \\
   --network-plugin=cni \\
-  --pod-cidr=${POD_CIDR} \\
   --register-node=true \\
-  --require-kubeconfig \\
-  --runtime-request-timeout=15m \\
-  --tls-cert-file=/var/lib/kubelet/${HOSTNAME}.pem \\
-  --tls-private-key-file=/var/lib/kubelet/${HOSTNAME}-key.pem \\
   --v=2
 Restart=on-failure
 RestartSec=5
@@ -173,26 +210,32 @@ WantedBy=multi-user.target
 EOF
 ```
 
-### 设定 Kube-Proxy 
+### 配置 Kube-Proxy
 
-```
+```sh
 sudo mv kube-proxy.kubeconfig /var/lib/kube-proxy/kubeconfig
 ```
 
-建立 `kube-proxy.service` systemd unit file:
+生成 `kube-proxy.service` systemd 配置文件：
 
-```
-cat > kube-proxy.service <<EOF
+```sh
+cat <<EOF | sudo tee /var/lib/kube-proxy/kube-proxy-config.yaml
+kind: KubeProxyConfiguration
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+clientConnection:
+  kubeconfig: "/var/lib/kube-proxy/kubeconfig"
+mode: "iptables"
+clusterCIDR: "10.200.0.0/16"
+EOF
+
+cat <<EOF | sudo tee /etc/systemd/system/kube-proxy.service
 [Unit]
 Description=Kubernetes Kube Proxy
-Documentation=https://github.com/GoogleCloudPlatform/kubernetes
+Documentation=https://github.com/kubernetes/kubernetes
 
 [Service]
 ExecStart=/usr/local/bin/kube-proxy \\
-  --cluster-cidr=10.200.0.0/16 \\
-  --kubeconfig=/var/lib/kube-proxy/kubeconfig \\
-  --proxy-mode=iptables \\
-  --v=2
+  --config=/var/lib/kube-proxy/kube-proxy-config.yaml
 Restart=on-failure
 RestartSec=5
 
@@ -201,53 +244,32 @@ WantedBy=multi-user.target
 EOF
 ```
 
-
-
 ### 启动 worker 服务
 
-
-```
-sudo mv kubelet.service kube-proxy.service /etc/systemd/system/
-```
-
-```
+```sh
 sudo systemctl daemon-reload
+sudo systemctl enable containerd kubelet kube-proxy
+sudo systemctl start containerd kubelet kube-proxy
 ```
 
-```
-sudo systemctl enable containerd cri-containerd kubelet kube-proxy
-```
-
-```
-sudo systemctl start containerd cri-containerd kubelet kube-proxy
-```
-> 记得上述的指令都要执行每个 worker 节点上: `worker-0`, `worker-1`, 和 `worker-2`
-
+> 记得在所有 worker 节点上面都运行一遍，包括 `worker-0`, `worker-1` 和 `worker-2`。
 
 ## 验证
 
-登入 其中一个控制节点:
+登入任意一台控制节点查询 Nodes 列表
 
-```
-gcloud compute ssh controller-0
-```
-
-列出目前以注册的Kubernetes 节点:
-
-
-```
-kubectl get nodes
+```sh
+gcloud compute ssh controller-0 \
+  --command "kubectl get nodes --kubeconfig admin.kubeconfig"
 ```
 
-> 输出为
+输出为
 
-
+```sh
+NAME       STATUS   ROLES    AGE   VERSION
+worker-0   Ready    <none>   24s   v1.18.6
+worker-1   Ready    <none>   24s   v1.18.6
+worker-2   Ready    <none>   24s   v1.18.6
 ```
-NAME       STATUS    ROLES     AGE       VERSION
-worker-0   Ready     <none>    1m        v1.8.0
-worker-1   Ready     <none>    1m        v1.8.0
-worker-2   Ready     <none>    1m        v1.8.0
-```
 
-
-Next: [配置 Kubectl](10-configuring-kubectl.md)
+下一步：[配置 Kubectl](10-configuring-kubectl.md)。
